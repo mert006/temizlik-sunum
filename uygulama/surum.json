@@ -1,0 +1,5 @@
+{
+ "surum": 1,
+ "notlar": "İlk sürüm.",
+ "dosyalar": ["app.py", "ayarlar.json", "sablon.pptx"]
+}

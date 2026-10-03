@@ -1,0 +1,8 @@
+build/
+dist/
+paket/
+__pycache__/
+*.spec
+kayitlar/
+uygulama_yedek/
+*.txt

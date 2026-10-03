@@ -1,0 +1,70 @@
+{
+  "kadro_rolleri": ["Proje Müdürü", "Ekip Şefi", "Makineci", "Camcı", "Personel"],
+  "vardiya_rolleri": ["Proje Müdürü", "Ekip Şefi", "Temizlik Personeli"],
+  "vardiya_sayisi": 3,
+  "makine_durumlari": ["AKTİF", "ARIZALI", "SERVİSTE"],
+  "varsayilan_makineler": [
+    ["TASKİ", "4000", "BİNİCİLİ YIKAMA MAKİNESİ", "AKTİF"],
+    ["TASKİ-1", "2500", "BİNİCİLİ YIKAMA MAKİNESİ", "ARIZALI"],
+    ["TASKİ-2", "2500", "BİNİCİLİ YIKAMA MAKİNESİ", "AKTİF"],
+    ["TASKİ", "1255", "İTİCİLİ YIKAMA MAKİNESİ", "AKTİF"],
+    ["TASKİ", "44", "ISLAK VAKUM", "ARIZALI"],
+    ["TASKİ", "44", "ISLAK VAKUM", "AKTİF"],
+    ["TASKİ", "165", "CİLA MAKİNESİ (ROTA)", "AKTİF"],
+    ["VENTO", "15", "KURU VAKUM", "AKTİF"],
+    ["VENTO", "15", "KURU VAKUM", "AKTİF"],
+    ["VENTO", "15", "KURU VAKUM", "AKTİF"],
+    ["İKRA MOGATEC", "BSF 5355", "KAR KÜREME MAKİNESİ", "AKTİF"],
+    ["HAKO MONITOR 82", "-", "OTOPARK YIKAMA MAKİNASI", "AKTİF"],
+    ["KAERCHER", "-", "BASINÇLI YIKAMA", "AKTİF"]
+  ],
+  "max_foto": 3,
+  "makine_dairesi_max_foto": 2,
+  "hedef_max_slayt": 20,
+  "min_kelime": 8,
+  "konum_kelimeleri": [
+    "kat", "otopark", "p1", "p2", "p3", "wc", "tuvalet", "teras", "çatı", "giriş", "çıkış", "dış alan", "iç alan",
+    "koridor", "yemek", "çöp", "merdiven", "asansör", "konya yolu", "myo", "muhsin", "kapı", "cephe", "peyzaj",
+    "ofis", "depo", "makine dairesi", "mescit", "bebek", "rampa", "sundurma", "havuz", "şarj", "oluk", "zemin",
+    "bölge", "alan", "blok", "mağaza", "galeri", "atrium", "servis"
+  ],
+  "kalip_ifadeler": ["tamamlanmıştır", "sağlanmıştır", "gerçekleştirilmiştir", "gerçekleştirildi", "tamamlandı", "sağlandı", "titizlikle"],
+  "kalip_max_tekrar": 3,
+  "dolgu_ifadeler": [
+    "daha temiz, düzenli ve estetik",
+    "temiz ve estetik bir görünüm",
+    "hijyenik ve sağlıklı bir ortam",
+    "daha ferah",
+    "titizlikle"
+  ],
+  "ozel_isimler": [
+    "AVM", "WC", "MYO", "ISS", "KONE", "OTİS", "TASKİ", "P1", "P2", "P3", "P4", "LED", "OED",
+    "Vega Taurus", "Konya Yolu", "Muhsin Yazıcıoğlu", "Proser", "Atatürk", "Ankara", "Türk Bayrağı"
+  ],
+  "yazim_duzeltmeleri": {
+    "temizligi": "temizliği",
+    "gerçkleştirilerek": "gerçekleştirilerek",
+    "gercekleştirildi": "gerçekleştirildi",
+    "yüzylerin": "yüzeylerin",
+    "taktir": "takdir",
+    "arttırmak": "artırmak",
+    "arttırılması": "artırılması",
+    "oto park": "otopark",
+    "makina": "makine",
+    "herşey": "her şey",
+    "birşey": "bir şey",
+    "yalnış": "yanlış",
+    "yada": "ya da",
+    "bir çok": "birçok",
+    "periyodik olarak düzenli": "düzenli periyotlarla"
+  },
+  "ornek_cumleler": [
+    "Zemin kat ve 2. kattaki ziyaretçi girişlerinin üstündeki sundurma camlarının detaylı temizliği yapılmıştır.",
+    "P2 ve P3 otopark zeminleri makineli yıkama ile temizlenmiş, kolon dipleri ve kasisler elle detaylandırılmıştır.",
+    "4. kat terastaki 18 adet cam panelde biriken kuş pisliği ve toz, yüksekte çalışma ekipmanıyla temizlenmiştir."
+  ],
+  "etkinlik_ornekleri": [
+    "12 personelimize kimyasal madde kullanımı ve kişisel koruyucu donanım eğitimi verilmiştir.",
+    "Eylül ayının elemanı olarak 2. vardiyadan Ayşe Yılmaz seçilmiş ve ödülü takdim edilmiştir."
+  ]
+}
