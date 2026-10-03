@@ -1,5 +1,5 @@
 {
- "surum": 1,
- "notlar": "İlk sürüm.",
+ "surum": 2,
+ "notlar": "Fiili kadro ve planlanan vardiyalar artık sabit. Şikayet soruları kaldırıldı. Makine dairesi fotoğrafları + kutularıyla ekleniyor. Sunum oluşturulmadan önce açıklamalar için düzeltme önerisi soruluyor.",
  "dosyalar": ["app.py", "ayarlar.json", "sablon.pptx"]
 }

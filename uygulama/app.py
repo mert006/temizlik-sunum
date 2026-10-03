@@ -12,7 +12,9 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import traceback
+import urllib.request
 import uuid
 
 import tkinter as tk
@@ -73,6 +75,16 @@ def metni_duzelt(metin, ayar):
     if len(harfler) > 8 and sum(1 for c in harfler if c.isupper()) / len(harfler) > 0.6:
         t = tr_lower(t)
         degisiklik.append("TAMAMI BÜYÜK HARF yazılmıştı, normal yazıma çevrildi.")
+    else:
+        korunan = {tr_lower(x) for x in ayar.get("ozel_isimler", [])}
+
+        def _kucult(m):
+            k = m.group(0)
+            return k if tr_lower(k) in korunan else tr_lower(k)
+        yeni = re.sub(r"\b[A-ZÇĞİÖŞÜ]{4,}\b", _kucult, t)
+        if yeni != t:
+            t = yeni
+            degisiklik.append("Cümle içindeki BÜYÜK HARFLİ kelimeler düzeltildi.")
 
     eski = t
     t = re.sub(r"\s+([,.;:!?])", r"\1", t)                       # noktalama öncesi boşluk
@@ -108,8 +120,8 @@ def metin_uyarilari(metin, ayar):
     """Engellemeyen (yumuşak) uyarılar."""
     uyari = []
     kelime = len(metin.split())
-    if kelime < ayar.get("min_kelime", 8):
-        uyari.append(f"Cümle kısa ({kelime} kelime). Nerede (kat/blok/alan), ne yapıldığını ve kapsamını yazın.")
+    if kelime < ayar.get("min_kelime", 3):
+        uyari.append(f"Açıklama {ayar.get('min_kelime', 3)} kelimeden az olamaz.")
     dusuk = tr_lower(metin)
     if not any(k in dusuk for k in ayar.get("konum_kelimeleri", [])):
         uyari.append("Konum yazılmamış görünüyor (ör. '2. kat', 'P2 otopark', 'Konya Yolu girişi').")
@@ -119,6 +131,59 @@ def metin_uyarilari(metin, ayar):
     if not re.search(r"\d", metin):
         uyari.append("İpucu: Mümkünse sayı ekleyin (ör. '12 adet cam', '3 kat', '2 gün').")
     return uyari
+
+
+# ---------------------------------------------------------------------------
+# Dil kontrolü (Gemini) — sunum oluşturmadan önce açıklamalara düzeltme önerisi
+# ---------------------------------------------------------------------------
+
+DIL_ISTEMI = """Aşağıdaki metinler bir AVM temizlik biriminin aylık faaliyet sunumundaki slayt açıklamalarıdır.
+Her birini kurumsal ve düzgün Türkçeye çevir:
+- büyük/küçük harf, yazım, noktalama ve dilbilgisi hatalarını düzelt,
+- parçalı ifadeleri tek akıcı cümlede birleştir,
+- edilgen ve geçmiş zaman kullan (…yapılmıştır, …silinmiştir, …temizlenmiştir),
+- metinde OLMAYAN bilgi ekleme; sayıları, yer adlarını ve kısaltmaları (AVM, WC, P1, P2…) koru,
+- zaten düzgün olan cümleyi AYNEN bırak.
+Örnek: "AVM geneli Sundurma CAMLARI silimi yapılmıştır. Toplam 8 cam." → "AVM genelinde toplam 8 adet olan sundurma camları silinmiştir."
+Sadece JSON dizi döndür: girdiyle aynı sırada ve aynı sayıda metin.
+
+Girdi:
+"""
+
+
+def gemini_anahtari(kok):
+    try:
+        with open(os.path.join(kok, "anahtar.txt"), encoding="utf-8") as f:
+            a = f.read().strip()
+            if a:
+                return a
+    except OSError:
+        pass
+    return os.environ.get("GEMINI_API_KEY", "").strip()
+
+
+def gemini_duzelt(metinler, anahtar, modeller):
+    """Düzeltilmiş metin listesi döner; başarısızsa istisna fırlatır."""
+    govde = json.dumps({
+        "contents": [{"parts": [{"text": DIL_ISTEMI + json.dumps(metinler, ensure_ascii=False)}]}],
+        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+    }).encode("utf-8")
+    son_hata = None
+    for model in modeller:
+        try:
+            req = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={anahtar}",
+                data=govde, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=40) as r:
+                cevap = json.loads(r.read().decode("utf-8"))
+            metin = cevap["candidates"][0]["content"]["parts"][0]["text"]
+            sonuc = json.loads(metin)
+            if isinstance(sonuc, list) and len(sonuc) == len(metinler) and all(isinstance(x, str) for x in sonuc):
+                return [" ".join(x.split()) for x in sonuc]
+            son_hata = RuntimeError(f"{model}: beklenmeyen cevap")
+        except Exception as e:  # sıradaki modeli dene
+            son_hata = e
+    raise son_hata or RuntimeError("model yok")
 
 
 # ---------------------------------------------------------------------------
@@ -253,18 +318,6 @@ def genel_durum_cumlesi(v):
     p = v["performans"]
     c = [f"{ay} ayında departmanımız {fiili} kişilik tanımlı kadroya karşılık {gerc} personelle hizmet vermiştir"]
     c[0] += f" ({eksik} eksik personel)." if eksik > 0 else "."
-    s, o = p["sikayet"], p.get("onceki_sikayet")
-    if o is None:
-        c.append(f"Ay içinde {s} şikayet alınmıştır.")
-    elif o == 0:
-        c.append(f"Ay içinde {s} şikayet alınmıştır (geçen ay şikayet alınmamıştı).")
-    else:
-        fark = (s - o) / o * 100
-        if abs(fark) < 0.5:
-            c.append(f"Ay içinde {s} şikayet alınmış olup geçen ayla aynı seviyededir.")
-        else:
-            yon = "azalmıştır" if fark < 0 else "artmıştır"
-            c.append(f"Ay içinde {s} şikayet alınmış olup geçen aya göre %{abs(fark):.0f} {yon}.")
     d, u = p["denetim"], p["uygunsuzluk"]
     if d:
         if u:
@@ -288,18 +341,11 @@ def _genel_durum_slayti(prs, v):
     fiili = sum(v["kadro"]["fiili"])
     gerc = sum(v["kadro"]["gerceklesen"])
     p = v["performans"]
-    s_alt = "Bu ay alınan şikayet"
-    o = p.get("onceki_sikayet")
-    if o:
-        fark = (p["sikayet"] - o) / o * 100
-        s_alt = f"Şikayet (geçen ay {o}, %{abs(fark):.0f} {'azalış' if fark < 0 else 'artış' if fark > 0 else 'değişim'})"
-    elif o == 0:
-        s_alt = "Şikayet (geçen ay 0)"
     kartlar = [
         (str(fiili), "Tanımlı kadro"),
         (str(gerc), f"Fiilen çalışan personel\n({fiili - gerc} eksik)" if fiili > gerc else "Fiilen çalışan personel"),
-        (str(p["sikayet"]), s_alt),
         (str(p["denetim"]), f"Hijyen denetimi\n({p['uygunsuzluk']} uygunsuzluk)"),
+        (str(p.get("egitim", 0)), "Eğitim verilen personel"),
     ]
     kw, gap, top, kh = 2.75, 0.3, 1.25, 2.1
     x0 = (13.333 - (4 * kw + 3 * gap)) / 2
@@ -425,7 +471,7 @@ def bos_veri(ayar, yil, ay):
         "yil": yil, "ay": ay, "hazirlayan": "",
         "kadro": {"fiili": [0] * kr, "gerceklesen": [0] * kr},
         "vardiya": [{"plan": [0] * vr, "gercek": [0] * vr} for _ in range(ayar["vardiya_sayisi"])],
-        "performans": {"sikayet": 0, "onceki_sikayet": None, "denetim": 0, "uygunsuzluk": 0, "egitim": 0,
+        "performans": {"denetim": 0, "uygunsuzluk": 0, "egitim": 0,
                        "ek_not": ""},
         "makine_dairesi": {"fotolar": [], "not": ""},
         "makineler": [list(m) for m in ayar["varsayilan_makineler"]],
@@ -513,9 +559,11 @@ class Kaydirmali(ttk.Frame):
         self.canvas.yview_scroll(int(-e.delta / 120), "units")
 
 
-def sayi_kutusu(parent, deger, genislik=6, degisince=None):
+def sayi_kutusu(parent, deger, genislik=6, degisince=None, sabit=False):
     var = tk.StringVar(value="" if deger is None else str(deger))
     e = ttk.Entry(parent, textvariable=var, width=genislik, justify="center", font=YAZI)
+    if sabit:
+        e.state(["disabled"])  # silik, tıklanamaz — sadece görüntülenir
     if degisince:
         var.trace_add("write", lambda *a: degisince())
     return e, var
@@ -698,6 +746,12 @@ class Uygulama:
         self.hazirlayan_var = tk.StringVar(value=(self.v or {}).get("hazirlayan", ""))
         ttk.Entry(f, textvariable=self.hazirlayan_var, width=40, font=YAZI).grid(row=3, column=0, columnspan=4,
                                                                                  sticky="w")
+        self.hitap_var = tk.StringVar(value=(self.v or {}).get("hitap", ""))
+        hf = ttk.Frame(f, style="Beyaz.TFrame")
+        hf.grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Label(hf, text="Hitap:", font=YAZI_K).pack(side="left", padx=(0, 10))
+        for h in ("Hanım", "Bey"):
+            ttk.Radiobutton(hf, text=h, value=h, variable=self.hitap_var).pack(side="left", padx=6)
 
         rehber = ttk.LabelFrame(self.govde, text="  Sunumda dikkat edilecek kurallar  ", padding=14)
         rehber.pack(fill="x", pady=24)
@@ -728,16 +782,25 @@ class Uygulama:
                     v["kadro"] = copy.deepcopy(onceki["kadro"])
                     v["vardiya"] = copy.deepcopy(onceki["vardiya"])
                     v["makineler"] = copy.deepcopy(onceki["makineler"])
-                    v["performans"]["onceki_sikayet"] = onceki["performans"]["sikayet"]
             self.v = v
+        self.sabitleri_uygula()
         self.v["hazirlayan"] = self.hazirlayan_var.get().strip()
+        self.v["hitap"] = self.hitap_var.get()
+        if self.v["hitap"] not in ("Hanım", "Bey"):
+            raise ValueError("Lütfen hitap şeklini seçin (Hanım / Bey).")
+
+    def sabitleri_uygula(self):
+        """Fiili kadro ve planlanan vardiyalar ayarlar.json'dan gelir, programda değiştirilemez."""
+        if "sabit_fiili_kadro" in self.ayar:
+            self.v["kadro"]["fiili"] = list(self.ayar["sabit_fiili_kadro"])
+        for vd, plan in zip(self.v["vardiya"], self.ayar.get("sabit_vardiya_plan", [])):
+            vd["plan"] = list(plan)
 
     # ---- 2. kadro ---------------------------------------------------------
     def adim_kadro(self):
         self.baslik("Kadro bilgileri",
-                    "Fiili kadro: sözleşmede tanımlı olması gereken personel sayısı.  Gerçekleşen kadro: bu ay "
-                    "fiilen çalışan personel sayısı. (Geçen ay girdiyseniz rakamlar dolu gelir, sadece değişeni "
-                    "düzeltin.)")
+                    "Fiili kadro sözleşmede tanımlıdır ve değiştirilemez. Gerçekleşen kadro: bu ay fiilen çalışan "
+                    "personel sayısı. (Geçen ay girdiyseniz rakamlar dolu gelir, sadece değişeni düzeltin.)")
         roller = self.ayar["kadro_rolleri"]
         f = ttk.Frame(self.govde, style="Beyaz.TFrame")
         f.pack(anchor="w", pady=10)
@@ -750,7 +813,7 @@ class Uygulama:
             ttk.Label(f, text=etiket, font=YAZI_K).grid(row=satir, column=0, sticky="w", padx=(0, 12), pady=6)
             vars_ = []
             for c, d in enumerate(self.v["kadro"][anahtar], start=1):
-                e, var = sayi_kutusu(f, d, degisince=self.kadro_toplamlari)
+                e, var = sayi_kutusu(f, d, degisince=self.kadro_toplamlari, sabit=(anahtar == "fiili"))
                 e.grid(row=satir, column=c, padx=10, pady=6)
                 vars_.append(var)
             self.kadro_vars[anahtar] = vars_
@@ -780,8 +843,8 @@ class Uygulama:
     # ---- 3. vardiya -------------------------------------------------------
     def adim_vardiya(self):
         self.baslik("Vardiya dağılımı",
-                    "Her vardiya için planlanan (olması gereken) ve gerçekleşen (fiilen çalışan) personel sayısını "
-                    "yazın.")
+                    "Planlanan vardiya sayıları sabittir. Her vardiya için sadece gerçekleşen (fiilen çalışan) "
+                    "personel sayısını yazın.")
         roller = self.ayar["vardiya_rolleri"]
         f = ttk.Frame(self.govde, style="Beyaz.TFrame")
         f.pack(anchor="w", pady=10)
@@ -797,7 +860,7 @@ class Uygulama:
                     row=satir, column=0, sticky="w", padx=(0, 12), pady=5)
                 vars_ = []
                 for c, d in enumerate(vd[anahtar], start=1):
-                    e, var = sayi_kutusu(f, d, degisince=self.vardiya_toplamlari)
+                    e, var = sayi_kutusu(f, d, degisince=self.vardiya_toplamlari, sabit=(anahtar == "plan"))
                     e.grid(row=satir, column=c, padx=12, pady=5)
                     vars_.append(var)
                 lbl = ttk.Label(f, text="", font=YAZI_K)
@@ -843,14 +906,12 @@ class Uygulama:
     def adim_performans(self):
         self.baslik("Performans verileri",
                     "Üst yönetim 'yapıldı' değil 'ne kadar, ne değişti' görmek ister. Bu rakamlar sunumdaki Genel "
-                    "Durum slaytına otomatik yazılır ve geçen ayla karşılaştırılır.")
+                    "Durum slaytına otomatik yazılır.")
         p = self.v["performans"]
         f = ttk.Frame(self.govde, style="Beyaz.TFrame")
         f.pack(anchor="w", pady=6)
         self.perf_vars = {}
         alanlar = [
-            ("sikayet", "Bu ay gelen şikayet sayısı (ziyaretçi + mağaza + yönetim)"),
-            ("onceki_sikayet", "Geçen ay gelen şikayet sayısı"),
             ("denetim", "Bu ay yapılan hijyen denetimi sayısı"),
             ("uygunsuzluk", "Denetimlerde tespit edilen uygunsuzluk sayısı"),
             ("egitim", "Bu ay eğitim verilen personel sayısı (yoksa 0)"),
@@ -860,9 +921,6 @@ class Uygulama:
             e, var = sayi_kutusu(f, p.get(k), genislik=8)
             e.grid(row=satir, column=1, sticky="w")
             self.perf_vars[k] = var
-        if p.get("onceki_sikayet") is not None:
-            ttk.Label(f, text="(geçen ayki kayıttan otomatik geldi)", foreground=GRI, font=ACIKLAMA).grid(
-                row=1, column=2, sticky="w", padx=8)
         ttk.Label(self.govde, text="Eklemek istediğiniz kısa değerlendirme (isteğe bağlı, 1-2 cümle):",
                   font=YAZI_K).pack(anchor="w", pady=(16, 4))
         self.ek_not = tk.Text(self.govde, height=3, width=110, font=YAZI, wrap="word", relief="solid", bd=1)
@@ -871,8 +929,7 @@ class Uygulama:
 
     def topla_performans(self):
         p = self.v["performans"]
-        for k, ad in (("sikayet", "Bu ay şikayet"), ("onceki_sikayet", "Geçen ay şikayet"),
-                      ("denetim", "Hijyen denetimi"), ("uygunsuzluk", "Uygunsuzluk"), ("egitim", "Eğitim")):
+        for k, ad in (("denetim", "Hijyen denetimi"), ("uygunsuzluk", "Uygunsuzluk"), ("egitim", "Eğitim")):
             p[k] = sayi_oku(self.perf_vars[k], ad)
         if p["uygunsuzluk"] and not p["denetim"]:
             raise ValueError("Uygunsuzluk sayısı girilmiş ama denetim sayısı 0. Lütfen kontrol edin.")
@@ -882,18 +939,14 @@ class Uygulama:
     # ---- 5. makine --------------------------------------------------------
     def adim_makine(self):
         self.baslik("Makine dairesi ve makine parkuru",
-                    "Makine dairesinin bu ayki durumunu gösteren en fazla 2 fotoğraf seçin. Altta makine listesini "
+                    "Makine dairesinin bu ayki durumunu gösteren 2 fotoğraf ekleyin (kutudaki + işaretine tıklayın). "
+                    "Altta makine listesini "
                     "güncelleyin: durumu değişen makinenin 'Durum' kutusunu değiştirin, yeni makine geldiyse ekleyin.")
         ust = ttk.LabelFrame(self.govde, text="  Makine dairesi fotoğrafları (en fazla 2)  ", padding=10)
         ust.pack(fill="x")
         self.md_foto_alani = ttk.Frame(ust, style="Beyaz.TFrame")
         self.md_foto_alani.pack(side="left", fill="x", expand=True)
-        sag = ttk.Frame(ust, style="Beyaz.TFrame")
-        sag.pack(side="right")
-        ttk.Button(sag, text="📷  Fotoğraf seç", command=self.md_foto_ekle).pack(anchor="e")
-        ttk.Label(sag, text="Kısa açıklama (isteğe bağlı):", font=ACIKLAMA).pack(anchor="e", pady=(8, 0))
-        self.md_not = tk.StringVar(value=self.v["makine_dairesi"].get("not", ""))
-        ttk.Entry(sag, textvariable=self.md_not, width=45).pack(anchor="e")
+        self.v["makine_dairesi"]["not"] = ""
         self.md_fotolari_ciz()
 
         alt = ttk.LabelFrame(self.govde, text="  Makine parkuru  ", padding=8)
@@ -914,18 +967,27 @@ class Uygulama:
         for w in self.md_foto_alani.winfo_children():
             w.destroy()
         fotolar = self.v["makine_dairesi"]["fotolar"]
-        if not fotolar:
-            ttk.Label(self.md_foto_alani, text="Henüz fotoğraf seçilmedi.", foreground=GRI).pack(anchor="w")
-        for i, f in enumerate(fotolar):
-            self.kucuk_resim(self.md_foto_alani, f, lambda i=i: self.md_foto_sil(i)).pack(side="left", padx=6)
+        for i in range(self.ayar["makine_dairesi_max_foto"]):
+            if i < len(fotolar):
+                self.kucuk_resim(self.md_foto_alani, fotolar[i], lambda i=i: self.md_foto_sil(i),
+                                 boyut=140).pack(side="left", padx=10)
+            else:
+                self.arti_kutusu(self.md_foto_alani, self.md_foto_ekle).pack(side="left", padx=10, anchor="n")
+
+    def arti_kutusu(self, parent, tikla, boyut=140):
+        """İçinde + olan, tıklanınca fotoğraf seçtiren kare kutu."""
+        c = tk.Canvas(parent, width=boyut, height=boyut, bg="#f4f6fb", highlightthickness=0, cursor="hand2")
+        c.create_rectangle(3, 3, boyut - 3, boyut - 3, outline=MAVI_HEX, width=2, dash=(6, 4))
+        c.create_text(boyut / 2, boyut / 2 - 10, text="+", fill=MAVI_HEX, font=("Segoe UI", 40, "bold"))
+        c.create_text(boyut / 2, boyut - 24, text="Fotoğraf ekle", fill=GRI, font=ACIKLAMA)
+        c.bind("<Button-1>", lambda e: tikla())
+        return c
 
     def md_foto_ekle(self):
         fotolar = self.v["makine_dairesi"]["fotolar"]
-        kalan = self.ayar["makine_dairesi_max_foto"] - len(fotolar)
-        if kalan <= 0:
-            messagebox.showinfo("Sınır", "En fazla 2 fotoğraf seçebilirsiniz. Önce birini kaldırın.")
+        if len(fotolar) >= self.ayar["makine_dairesi_max_foto"]:
             return
-        fotolar.extend(self.foto_sec(kalan))
+        fotolar.extend(self.foto_sec(1))
         self.md_fotolari_ciz()
         self.kaydet()
 
@@ -976,7 +1038,6 @@ class Uygulama:
         if not liste:
             raise ValueError("Makine listesi boş olamaz.")
         self.v["makineler"] = liste
-        self.v["makine_dairesi"]["not"] = metni_duzelt(self.md_not.get(), self.ayar)[0] if self.md_not.get().strip() else ""
         if not self.v["makine_dairesi"]["fotolar"]:
             return messagebox.askyesno("Fotoğraf yok",
                                        "Makine dairesi fotoğrafı seçmediniz. Bu slayt sunuma eklenmeyecek.\n\n"
@@ -1213,8 +1274,13 @@ class Uygulama:
                                                 "fotoğrafsız açıklama da sunuma girmez.")
             return False
         duz, degisiklik = metni_duzelt(t, self.ayar)
+        en_az = self.ayar.get("min_kelime", 3)
+        if len(duz.split()) < en_az:
+            if not sessiz:
+                messagebox.showwarning("Eksik", f"Açıklama {en_az} kelimeden az olamaz.")
+            return False
         uyarilar = metin_uyarilari(duz, self.ayar)
-        ciddi = [u for u in uyarilar if not u.startswith("İpucu")]
+        ciddi = [u for u in uyarilar if not u.startswith("İpucu") and not u.startswith("Açıklama")]
         if ciddi and not sessiz:
             if not messagebox.askyesno("Cümleyi kontrol edin",
                                        "\n\n".join("⚠ " + u for u in ciddi) +
@@ -1248,8 +1314,8 @@ class Uygulama:
         fiili = sum(v["kadro"]["fiili"])
         sonuc.append(("ok" if fiili else "hata", f"Kadro bilgisi girildi (tanımlı {fiili}, "
                                                  f"fiilen çalışan {sum(v['kadro']['gerceklesen'])})."))
-        sonuc.append(("ok", f"Performans: {v['performans']['sikayet']} şikayet, {v['performans']['denetim']} "
-                            f"hijyen denetimi."))
+        sonuc.append(("ok", f"Performans: {v['performans']['denetim']} hijyen denetimi, "
+                            f"{v['performans'].get('egitim', 0)} personele eğitim."))
         tum = v["isler"] + v["etkinlikler"]
         fotosuz = [i + 1 for i, x in enumerate(tum) if not x["fotolar"]]
         sonuc.append(("hata" if fotosuz else "ok", "Her işin fotoğrafı ve açıklaması var." if not fotosuz
@@ -1308,6 +1374,84 @@ class Uygulama:
         self.sonuc_lbl.pack(side="left", padx=16)
 
     def olustur(self):
+        """Önce açıklamaları dil kontrolünden geçirir, onaylardan sonra sunumu üretir."""
+        tum = self.v["isler"] + self.v["etkinlikler"]
+        bekleyen = [x for x in tum if x.get("kontrol") != x["metin"]]
+        if not bekleyen:
+            return self._sunumu_uret()
+        self.sonuc_lbl.config(text="Açıklamalar dil kontrolünden geçiriliyor, lütfen bekleyin…", foreground=GRI)
+        self.root.config(cursor="watch")
+        metinler = [x["metin"] for x in bekleyen]
+        sonuc = {}
+
+        def calis():
+            try:
+                anahtar = gemini_anahtari(self.kok)
+                if not anahtar:
+                    raise RuntimeError("anahtar yok")
+                sonuc["oneriler"] = gemini_duzelt(metinler, anahtar, self.ayar.get("gemini_modeller", []))
+            except Exception as e:
+                sonuc["hata"] = e
+                sonuc["oneriler"] = [metni_duzelt(m, self.ayar)[0] for m in metinler]
+        th = threading.Thread(target=calis, daemon=True)
+        th.start()
+
+        def bekle():
+            if th.is_alive():
+                self.root.after(200, bekle)
+                return
+            self.root.config(cursor="")
+            self.sonuc_lbl.config(text="")
+            oneriler = sonuc["oneriler"]
+            sorulacak = [(x, o) for x, o in zip(bekleyen, oneriler) if o.strip() and o.strip() != x["metin"].strip()]
+            for sira, (x, oneri) in enumerate(sorulacak, start=1):
+                if self.duzeltme_sor(x["metin"], oneri, sira, len(sorulacak)):
+                    x["metin"] = oneri
+            for x in bekleyen:
+                x["kontrol"] = x["metin"]
+            self.kaydet()
+            self._sunumu_uret()
+        bekle()
+
+    def duzeltme_sor(self, yazilan, oneri, sira, toplam):
+        """Düzeltme önerisini sorar. Düzelt = True, Böyle kalsın = False."""
+        ad = (self.v.get("hazirlayan") or "").split()
+        hitap = f"{ad[0]} {self.v.get('hitap', '')}".strip() if ad else ""
+        pen = tk.Toplevel(self.root)
+        pen.title(f"Açıklama kontrolü ({sira}/{toplam})")
+        pen.configure(bg="#ffffff")
+        pen.transient(self.root)
+        pen.resizable(False, False)
+        cevap = {"d": False}
+        ic = tk.Frame(pen, bg="#ffffff", padx=24, pady=18)
+        ic.pack(fill="both")
+        tk.Label(ic, text=f"Açıklama {sira} / {toplam}", bg="#ffffff", fg=GRI, font=ACIKLAMA).pack(anchor="w")
+        tk.Label(ic, text="Yazdığınız:", bg="#ffffff", font=YAZI_K).pack(anchor="w", pady=(8, 2))
+        tk.Label(ic, text=yazilan, bg="#f4f4f4", fg="#444444", font=("Segoe UI", 12), wraplength=640,
+                 justify="left", padx=10, pady=8).pack(anchor="w", fill="x")
+        tk.Label(ic, text=f"'{oneri}' olarak düzelteyim mi, yoksa böyle mi kalmasını istersiniz"
+                          f"{' ' + hitap if hitap else ''}?",
+                 bg="#ffffff", fg=YESIL, font=("Segoe UI", 12, "bold"), wraplength=640, justify="left").pack(
+            anchor="w", pady=(16, 4))
+        bf = tk.Frame(ic, bg="#ffffff")
+        bf.pack(fill="x", pady=(14, 0))
+
+        def sec(d):
+            cevap["d"] = d
+            pen.destroy()
+        ttk.Button(bf, text="✔  Düzelt", style="Buyuk.TButton", command=lambda: sec(True)).pack(side="left")
+        ttk.Button(bf, text="Böyle kalsın", style="Buyuk.TButton", command=lambda: sec(False)).pack(side="left",
+                                                                                                   padx=12)
+        pen.protocol("WM_DELETE_WINDOW", lambda: sec(False))
+        pen.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - pen.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - pen.winfo_height()) // 3
+        pen.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        pen.grab_set()
+        self.root.wait_window(pen)
+        return cevap["d"]
+
+    def _sunumu_uret(self):
         v = copy.deepcopy(self.v)
         for x in v["isler"] + v["etkinlikler"]:
             x["metin"] = metni_duzelt(x["metin"], self.ayar)[0]
